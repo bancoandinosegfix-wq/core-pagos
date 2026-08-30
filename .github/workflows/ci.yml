@@ -63,6 +63,16 @@ jobs:
     # El gate necesita el resultado aunque este job termine en rojo.
     outputs:
       resultado: ${{ steps.segfix.outcome }}
+      exec_id: ${{ steps.segfix.outputs.exec_id }}
+      exec_url: ${{ steps.segfix.outputs.exec_url }}
+      found: ${{ steps.segfix.outputs.found }}
+      fixed: ${{ steps.segfix.outputs.fixed }}
+      manual: ${{ steps.segfix.outputs.manual }}
+      blockers: ${{ steps.segfix.outputs.blockers }}
+      blockers_top: ${{ steps.segfix.outputs.blockers_top }}
+      pr_url: ${{ steps.segfix.outputs.pr_url }}
+      push_error: ${{ steps.segfix.outputs.push_error }}
+      threshold: ${{ steps.segfix.outputs.threshold }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -85,16 +95,66 @@ jobs:
     name: Security Gate
     runs-on: ubuntu-latest
     needs: seguridad
+    env:
+      EXEC_URL: ${{ needs.seguridad.outputs.exec_url }}
+      EXEC_ID: ${{ needs.seguridad.outputs.exec_id }}
+      FOUND: ${{ needs.seguridad.outputs.found }}
+      FIXED: ${{ needs.seguridad.outputs.fixed }}
+      BLOCKERS: ${{ needs.seguridad.outputs.blockers }}
+      BLOCKERS_TOP: ${{ needs.seguridad.outputs.blockers_top }}
+      PR_URL: ${{ needs.seguridad.outputs.pr_url }}
+      PUSH_ERROR: ${{ needs.seguridad.outputs.push_error }}
+      THRESHOLD: ${{ needs.seguridad.outputs.threshold }}
     steps:
       - name: Evaluar el resultado del análisis
         run: |
-          if [ "${{ needs.seguridad.outputs.resultado }}" != "success" ]; then
-            echo "::error::Security Gate: quedan vulnerabilidades por encima del umbral."
-            echo "Revisá el detalle en la consola de SegFix. Si alguna es un falso positivo,"
-            echo "excepcionala con justificación y fecha de revisión, y volvé a correr el pipeline."
-            exit 1
+          echo "════════════════════════════════════════════════════════════════════"
+          echo "  SegFix · Security Gate"
+          echo "════════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "  Vulnerabilidades encontradas ....... ${FOUND:-0}"
+          echo "  Remediadas automáticamente por IA .. ${FIXED:-0}"
+          echo "  Umbral que bloquea el despliegue ... ${THRESHOLD:-high} o superior"
+          echo ""
+          if [ -n "$PR_URL" ]; then
+            echo "  Pull Request con los fixes:"
+            echo "    $PR_URL"
+            echo ""
+          elif [ -n "$PUSH_ERROR" ]; then
+            echo "  ⚠️  Las correcciones se generaron pero NO se pudieron escribir en el repositorio,"
+            echo "      así que todavía no hay Pull Request. Es un problema de credenciales del repo,"
+            echo "      no del análisis. Motivo:"
+            echo "        ${PUSH_ERROR}"
+            echo ""
           fi
-          echo "Security Gate aprobado: no quedan vulnerabilidades por encima del umbral."
+          echo "  Detalle completo de la ejecución #${EXEC_ID:-?} en SegFix:"
+          echo "    ${EXEC_URL:-https://platform.segfix.io/ejecuciones}"
+          echo ""
+
+          if [ "${{ needs.seguridad.outputs.resultado }}" = "success" ]; then
+            echo "  ✅ APROBADO — no quedan vulnerabilidades de severidad ${THRESHOLD:-high} o superior."
+            echo "     El despliegue continúa."
+            echo "════════════════════════════════════════════════════════════════════"
+            exit 0
+          fi
+
+          echo "  ⛔ BLOQUEADO — quedan ${BLOCKERS:-?} vulnerabilidades de severidad ${THRESHOLD:-high} o superior."
+          if [ -n "$BLOCKERS_TOP" ]; then
+            echo ""
+            echo "     Bloquean: ${BLOCKERS_TOP}"
+          fi
+          echo ""
+          echo "  ── Cómo destrabarlo ────────────────────────────────────────────"
+          echo "   1. Abrí la ejecución en SegFix y revisá cada hallazgo:"
+          echo "        ${EXEC_URL}"
+          echo "   2. Si alguno es un falso positivo o un riesgo aceptado, excepcionalo"
+          echo "      desde la consola con justificación y fecha de compromiso de revisión."
+          echo "   3. Volvé a correr este pipeline: con las excepciones aplicadas el gate"
+          echo "      pasa y el despliegue continúa."
+          echo "════════════════════════════════════════════════════════════════════"
+
+          echo "::error title=Despliegue bloqueado por SegFix::Quedan ${BLOCKERS:-?} vulnerabilidades de severidad ${THRESHOLD:-high} o superior sin resolver. Revisalas en ${EXEC_URL}"
+          exit 1
 
   package:
     name: Empaquetar imagen

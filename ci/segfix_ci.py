@@ -80,29 +80,118 @@ def api(base: str, token: str, method: str, path: str, body: dict | None = None)
 
 
 # ---------- resumen ----------
+SEV_ICON = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵"}
+
+
+def _blockers(findings: list[dict], gate_sev: str) -> list[dict]:
+    """Hallazgos SIN resolver que superan el umbral: son los que frenan el despliegue."""
+    if gate_sev == "none":
+        return []
+    thr = SEV_ORDER[gate_sev]
+    return [f for f in findings
+            if not f.get("resolved") and SEV_ORDER.get((f.get("severity") or "").lower(), 0) >= thr]
+
+
 def summarize(base: str, ex: dict, findings: list[dict], gate_sev: str, gate_pass: bool) -> str:
-    """Markdown para el job summary (GitHub) / archivo de resumen (ADO)."""
+    """Reporte para el equipo que mira el pipeline: qué resolvió SegFix, qué falta y qué hacer ahora."""
+    b = base.rstrip("/")
+    exec_url = f"{b}/ejecuciones/{ex['id']}"
     unresolved = [f for f in findings if not f.get("resolved")]
-    exec_url = f"{base.rstrip('/')}/ejecuciones/{ex['id']}"
-    icon = "✅" if gate_pass else "❌"
-    lines = [
-        f"## {icon} SegFix Security Scan — ejecución [#{ex['id']}]({exec_url})",
-        "",
-        f"| Vulns encontradas | Remediadas | Acción manual | Sin resolver | Gate (`--fail-on {gate_sev}`) |",
-        "|---|---|---|---|---|",
-        f"| {ex.get('vulns_found', 0)} | {ex.get('vulns_fixed', 0)} | {ex.get('vulns_manual', 0)} "
-        f"| {len(unresolved)} | {'APROBADO ✅' if gate_pass else 'BLOQUEADO ❌'} |",
-        "",
-    ]
+    blockers = _blockers(findings, gate_sev)
+    found, fixed = ex.get("vulns_found", 0) or 0, ex.get("vulns_fixed", 0) or 0
+    manual = ex.get("vulns_manual", 0) or 0
+    pct = round(fixed / found * 100) if found else 0
+
+    lines = [f"## 🛡️ SegFix · Análisis de seguridad del código", ""]
+
+    # Titular: lo que SegFix HIZO (esto es lo primero que se lee).
+    if fixed:
+        lines.append(f"> **SegFix remedió {fixed} de {found} vulnerabilidades automáticamente ({pct}%)** "
+                     f"y dejó el cambio listo para revisar.")
+    elif found:
+        lines.append(f"> **SegFix analizó el repositorio y encontró {found} vulnerabilidades.**")
+    else:
+        lines.append("> **SegFix analizó el repositorio y no encontró vulnerabilidades.** ✅")
+    lines += ["",
+              "| Encontradas | Remediadas por IA | Requieren acción manual | Bloquean el despliegue |",
+              "|:--:|:--:|:--:|:--:|",
+              f"| **{found}** | **{fixed}** | {manual} | {len(blockers)} |", ""]
+
     if ex.get("pr_url"):
-        lines.append(f"**Pull Request con los fixes:** {ex['pr_url']}\n")
-    if unresolved:
-        lines += ["### Vulnerabilidades sin resolver", "", "| Severidad | Dependencia | CVE |", "|---|---|---|"]
-        for f in sorted(unresolved, key=lambda x: -SEV_ORDER.get((x.get("severity") or "").lower(), 0))[:20]:
-            lines.append(f"| {(f.get('severity') or '?').upper()} | `{f.get('dependency', '?')}` | {f.get('cve_id') or '—'} |")
-        lines.append("")
-    lines.append(f"_Detalle completo, evidencia y compliance en la [consola SegFix]({exec_url})._")
+        lines += [f"### ✅ Pull Request listo para revisar", "",
+                  f"SegFix abrió un PR con las correcciones aplicadas y validadas: **{ex['pr_url']}**", ""]
+    elif ex.get("push_error"):
+        # Las correcciones existen pero no llegaron al repo: es un problema de ENTREGA (credenciales,
+        # permisos), no del análisis. Decirlo así evita que se lea como "SegFix no pudo arreglarlo".
+        lines += ["### ⚠️ Las correcciones no se pudieron entregar", "",
+                  f"SegFix generó las correcciones, pero **no pudo escribir en el repositorio**, así que "
+                  f"todavía no hay Pull Request y los hallazgos siguen abiertos.", "",
+                  "```", str(ex["push_error"]).strip()[:400], "```", "",
+                  f"Revisá las credenciales del repositorio en la consola y volvé a correr el pipeline "
+                  f"→ [Abrir la ejecución #{ex['id']}]({exec_url})", ""]
+
+    # Veredicto del gate, con el porqué en lenguaje de negocio.
+    if gate_pass:
+        lines += ["### 🚦 Security Gate: **APROBADO**", "",
+                  f"No quedan vulnerabilidades de severidad `{gate_sev}` o superior. El despliegue puede continuar.", ""]
+    else:
+        lines += ["### 🚦 Security Gate: **BLOQUEADO**", "",
+                  f"El despliegue se detuvo porque quedan **{len(blockers)} "
+                  f"{'vulnerabilidad' if len(blockers) == 1 else 'vulnerabilidades'} "
+                  f"de severidad `{gate_sev}` o superior** sin resolver.", "",
+                  "| | Severidad | Componente | CVE | Detalle |", "|:--:|---|---|---|---|"]
+        for f in sorted(blockers, key=lambda x: -SEV_ORDER.get((x.get("severity") or "").lower(), 0))[:20]:
+            sev = (f.get("severity") or "?").lower()
+            cve = f.get("cve_id") or ""
+            cve_txt = f"[{cve}](https://nvd.nist.gov/vuln/detail/{cve})" if cve else "—"
+            lines.append(f"| {SEV_ICON.get(sev, '⚪')} | **{sev.upper()}** | `{f.get('dependency', '?')}` "
+                         f"| {cve_txt} | [Ver en SegFix]({exec_url}) |")
+        if len(blockers) > 20:
+            lines.append(f"| | | _y {len(blockers) - 20} más_ | | [Ver todas]({exec_url}) |")
+        lines += ["",
+                  "#### ¿Qué sigue?", "",
+                  f"1. **Revisá el detalle** de cada hallazgo → [Abrir la ejecución #{ex['id']} en SegFix]({exec_url})",
+                  "2. **¿Es un falso positivo o un riesgo aceptado?** Excepcionalo desde la consola con "
+                  "justificación y fecha de compromiso de revisión.",
+                  "3. **Volvé a correr el pipeline**: con las excepciones aplicadas el gate pasa y el despliegue sigue.", ""]
+
+    if manual:
+        lines += [f"> ℹ️ {manual} "
+                  f"{'hallazgo requiere' if manual == 1 else 'hallazgos requieren'} una decisión humana por diseño "
+                  "(por ejemplo, rotar un secreto): no son una falla del análisis.", ""]
+
+    lines.append(f"---")
+    lines.append(f"📊 Evidencia, SBOM y reporte de compliance de esta ejecución: **[consola de SegFix]({exec_url})**")
     return "\n".join(lines)
+
+
+def write_outputs(base: str, ex: dict, findings: list[dict], gate_sev: str, gate_pass: bool) -> None:
+    """Expone el resultado como outputs del job, para que el Security Gate arme su propio mensaje."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    blockers = _blockers(findings, gate_sev)
+    top = sorted(blockers, key=lambda x: -SEV_ORDER.get((x.get("severity") or "").lower(), 0))[:5]
+    resumen = "; ".join(f"{(f.get('severity') or '?').upper()} {f.get('dependency', '?')}"
+                        f"{' (' + f['cve_id'] + ')' if f.get('cve_id') else ''}" for f in top)
+    vals = {
+        "exec_id": ex["id"],
+        "exec_url": f"{base.rstrip('/')}/ejecuciones/{ex['id']}",
+        "found": ex.get("vulns_found", 0) or 0,
+        "fixed": ex.get("vulns_fixed", 0) or 0,
+        "manual": ex.get("vulns_manual", 0) or 0,
+        "blockers": len(blockers),
+        "blockers_top": resumen,
+        "pr_url": ex.get("pr_url") or "",
+        "gate": "pass" if gate_pass else "block",
+        "threshold": gate_sev,
+        # Las correcciones no llegaron al repo (credenciales/permisos): el gate lo aclara aparte,
+        # porque la causa NO es que la IA no haya podido corregir.
+        "push_error": str(ex.get("push_error") or "").strip().replace("\n", " ")[:200],
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        for k, v in vals.items():
+            f.write(f"{k}={v}\n")
 
 
 def write_summary(md: str) -> None:
@@ -173,26 +262,40 @@ def main() -> int:
     if ex.get("status") == "failed":
         md = summarize(args.url, ex, findings, args.fail_on, False)
         write_summary(md)
-        print(f"::error::SegFix: la ejecución #{ex['id']} FALLÓ. Detalle: {exec_url}")
+        write_outputs(args.url, ex, findings, args.fail_on, False)
+        print(f"::error::SegFix no pudo completar el análisis (ejecución #{ex['id']}). "
+              f"Revisá el detalle y el motivo en {exec_url}")
         return 2
 
     # ---- Security Gate: vulns sin resolver con severidad >= umbral (excepciones ya vienen aplicadas) ----
-    gate_pass = True
-    if args.fail_on != "none":
-        threshold = SEV_ORDER[args.fail_on]
-        blockers = [f for f in findings
-                    if not f.get("resolved") and SEV_ORDER.get((f.get("severity") or "").lower(), 0) >= threshold]
-        gate_pass = not blockers
+    blockers = _blockers(findings, args.fail_on)
+    gate_pass = not blockers
 
     md = summarize(args.url, ex, findings, args.fail_on, gate_pass)
     write_summary(md)
+    write_outputs(args.url, ex, findings, args.fail_on, gate_pass)
+
+    found, fixed = ex.get("vulns_found", 0) or 0, ex.get("vulns_fixed", 0) or 0
     print()
-    print(f"SegFix ▸ encontradas={ex.get('vulns_found', 0)} remediadas={ex.get('vulns_fixed', 0)} "
-          f"manual={ex.get('vulns_manual', 0)} pr={ex.get('pr_url') or '—'}")
+    print(f"SegFix ▸ {fixed} de {found} vulnerabilidades remediadas automáticamente"
+          + (f" · {ex.get('vulns_manual')} requieren acción manual" if ex.get("vulns_manual") else ""))
+    if ex.get("pr_url"):
+        print(f"SegFix ▸ Pull Request con los fixes: {ex['pr_url']}")
+    elif ex.get("push_error"):
+        print(f"::warning title=SegFix no pudo entregar las correcciones::Las correcciones se generaron "
+              f"pero no se pudieron escribir en el repositorio, así que no hay Pull Request. "
+              f"Motivo: {str(ex['push_error']).strip()[:200]}")
+    print(f"SegFix ▸ Detalle de la ejecución: {exec_url}")
+
     if not gate_pass:
-        print(f"::error::Security Gate BLOQUEADO: quedan vulns sin resolver de severidad >= {args.fail_on}. {exec_url}")
+        top = "; ".join(f"{(f.get('severity') or '?').upper()} {f.get('dependency', '?')}" for f in blockers[:3])
+        print()
+        print(f"::error title=Security Gate bloqueado por SegFix::Quedan {len(blockers)} "
+              f"vulnerabilidades de severidad {args.fail_on} o superior sin resolver ({top}). "
+              f"Revisalas en {exec_url} — si alguna es un falso positivo, excepcionala con "
+              f"justificación y fecha de revisión, y volvé a correr el pipeline.")
         return 1
-    print(f"SegFix ▸ Security Gate APROBADO ✅ · {exec_url}")
+    print(f"SegFix ▸ Security Gate APROBADO ✅ — no quedan vulnerabilidades de severidad {args.fail_on} o superior.")
     return 0
 
 
