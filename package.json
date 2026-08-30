@@ -1,0 +1,21 @@
+{
+  "name": "core-pagos",
+  "version": "2.4.0",
+  "description": "Core de Pagos — API de transferencias, límites y conciliación interbancaria (Banco Andino)",
+  "main": "src/server.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js",
+    "lint": "node ci/lint.js"
+  },
+  "dependencies": {
+    "express": "4.17.1",
+    "jsonwebtoken": "8.5.1",
+    "lodash": "4.17.19",
+    "axios": "0.21.1",
+    "ssh2-sftp-client": "7.0.0",
+    "moment": "2.29.1",
+    "qs": "6.5.2"
+  }
+}
