@@ -13,6 +13,13 @@ on:
         required: false
         default: 'auto'
 
+# Un solo pipeline por rama a la vez. Dos corridas simultáneas sobre el mismo repositorio
+# (un push y un dispatch, por ejemplo) lanzan dos escaneos concurrentes en SegFix que se pisan
+# entre sí sobre el mismo árbol de trabajo, y ambos terminan fallando.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: '20'
 

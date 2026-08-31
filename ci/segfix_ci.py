@@ -315,13 +315,6 @@ def main() -> int:
               f"({int(time.time() - t0)}s)", flush=True)
 
     findings = ex.get("findings") or []
-    if ex.get("status") == "failed":
-        md = summarize(args.url, ex, findings, args.fail_on, False)
-        write_summary(md)
-        write_outputs(args.url, ex, findings, args.fail_on, False)
-        print(f"::error::SegFix no pudo completar el análisis (ejecución #{ex['id']}). "
-              f"Revisá el detalle y el motivo en {exec_url}")
-        return 2
 
     # ---- Security Gate ----
     # El veredicto lo da el SERVIDOR, según el perfil de seguridad asignado a ese repo o proyecto:
@@ -332,8 +325,19 @@ def main() -> int:
         gate_sev = g.get("fail_on") or "high"
         gate_pass = bool(g.get("passed"))
     else:
+        # 'auto' sin perfil del servidor cae al umbral por defecto: 'auto' no es una severidad y
+        # más abajo se compara contra el ranking. Esto pasa también cuando la ejecución falla y
+        # el servidor nunca llegó a emitir un veredicto.
         gate_sev = "high" if args.fail_on == "auto" else args.fail_on
         gate_pass = not _blockers(findings, gate_sev)
+
+    if ex.get("status") == "failed":
+        write_summary(summarize(args.url, ex, findings, gate_sev, False))
+        write_outputs(args.url, ex, findings, gate_sev, False)
+        print(f"::error::SegFix no pudo completar el análisis (ejecución #{ex['id']}). "
+              f"Revisá el detalle y el motivo en {exec_url}")
+        return 2
+
     blockers = _blockers(findings, gate_sev)
 
     md = summarize(args.url, ex, findings, gate_sev, gate_pass)
