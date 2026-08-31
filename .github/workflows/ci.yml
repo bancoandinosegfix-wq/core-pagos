@@ -197,8 +197,31 @@ jobs:
     needs: package
     if: github.ref == 'refs/heads/main'
     environment: staging
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
     steps:
       - name: Desplegar
+        id: deploy
         run: |
           echo "Desplegando core-pagos:${{ github.sha }} en staging…"
+          echo "url=${{ vars.STAGING_URL || 'http://core-pagos-demo.secfix.svc.cluster.local:8080' }}" >> "$GITHUB_OUTPUT"
           echo "Despliegue completado."
+
+  # DAST: con la aplicación YA CORRIENDO en staging, SegFix la ataca como lo haría un atacante.
+  # Encuentra lo que el análisis del código no puede ver: cabeceras, sesiones, configuración expuesta.
+  dast:
+    name: SegFix · análisis dinámico (DAST)
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Atacar la aplicación desplegada
+        env:
+          SEGFIX_TOKEN: ${{ secrets.SEGFIX_TOKEN }}
+        run: |
+          python ci/segfix_ci.py \
+            --dast "${{ needs.deploy.outputs.url }}" \
+            --branch "${{ github.head_ref || github.ref_name }}"

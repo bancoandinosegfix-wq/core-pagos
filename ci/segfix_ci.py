@@ -263,6 +263,9 @@ def main() -> int:
     p.add_argument("--max-wait", type=int, default=1800, help="Segundos máximos de espera (default 1800)")
     p.add_argument("--poll", type=int, default=10, help="Intervalo de polling en segundos (default 10)")
     p.add_argument("--no-wait", action="store_true", help="Lanza y no espera el resultado (sin gate)")
+    p.add_argument("--dast", metavar="URL", default="",
+                   help="Análisis dinámico (DAST): ataca la aplicación YA DESPLEGADA en esa URL en vez "
+                        "de analizar el código. Va después del deploy a staging.")
     args = p.parse_args()
 
     if not args.token:
@@ -278,13 +281,21 @@ def main() -> int:
 
     body = {"target_branch": branch, "origin": ci["origin"],
             "ci_commit": ci["commit"] or None, "ci_run_url": ci["run_url"] or None}
+    if args.dast:
+        # DAST: ZAP ataca la app corriendo. El repo sigue viajando para saber a qué sistema pertenece
+        # el hallazgo (y así aplicarle su perfil y su contexto de negocio).
+        body["scanner"] = "zap"
+        body["target_url"] = args.dast
     if args.repo_id:
         body["repo_id"] = args.repo_id
     else:
         body["repo_url"] = repo_url
 
-    print(f"SegFix ▸ lanzando escaneo de {repo_url or f'repo_id={args.repo_id}'} (rama {branch}) "
-          f"desde {ci['origin']}…")
+    if args.dast:
+        print(f"SegFix ▸ análisis dinámico (DAST) contra {args.dast} — atacando la app desplegada…")
+    else:
+        print(f"SegFix ▸ lanzando escaneo de {repo_url or f'repo_id={args.repo_id}'} (rama {branch}) "
+              f"desde {ci['origin']}…")
     ex = api(args.url, args.token, "POST", "/api/executions", body)
     exec_url = f"{args.url.rstrip('/')}/ejecuciones/{ex['id']}"
     print(f"SegFix ▸ ejecución #{ex['id']} creada → {exec_url}")
