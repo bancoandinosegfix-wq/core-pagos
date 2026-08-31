@@ -6,19 +6,21 @@ Sin dependencias externas (stdlib): apto para cualquier runner con Python 3.9+.
 Uso típico (GitHub Actions):
     env:
       SEGFIX_TOKEN: ${{ secrets.SEGFIX_TOKEN }}
-    run: python segfix_ci.py --fail-on high
+    run: python segfix_ci.py
 
 Uso típico (Azure DevOps):
     env:
       SEGFIX_TOKEN: $(SEGFIX_TOKEN)
-    script: python integrations/ci/segfix_ci.py --fail-on high
+    script: python integrations/ci/segfix_ci.py
 
 Qué hace:
   1. Detecta el contexto CI (GitHub Actions / Azure Pipelines): repo, rama, commit, link al run.
   2. POST /api/executions con el PAT (Bearer scfx_...): la ejecución entra al MISMO motor y
      facturación que la consola, etiquetada con su origen (se ve en la consola con badge CI).
   3. Espera el resultado (polling) y muestra el resumen (vulns, remediadas, PR).
-  4. Security Gate: sale con código 1 si quedan vulnerabilidades SIN resolver de severidad >= --fail-on.
+  4. Security Gate: el veredicto lo da SegFix según el PERFIL de seguridad asignado al repo o a su
+     proyecto, así la política no se repite en el YAML de cada repositorio. Sale con código 1 si el
+     gate no pasa. `--fail-on <sev>` fuerza un umbral y pisa el perfil (override de emergencia).
 
 Códigos de salida: 0 ok/gate aprobado · 1 gate NO aprobado · 2 la ejecución falló · 3 error de uso/config.
 """
@@ -83,13 +85,37 @@ def api(base: str, token: str, method: str, path: str, body: dict | None = None)
 SEV_ICON = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵"}
 
 
+def _abierto(f: dict) -> bool:
+    """Riesgo vivo: ni remediado ni exceptuado (falso positivo / riesgo aceptado con vencimiento)."""
+    return not f.get("resolved") and not f.get("exception")
+
+
 def _blockers(findings: list[dict], gate_sev: str) -> list[dict]:
-    """Hallazgos SIN resolver que superan el umbral: son los que frenan el despliegue."""
+    """Hallazgos abiertos que superan el umbral: son los que frenan el despliegue."""
     if gate_sev == "none":
         return []
     thr = SEV_ORDER[gate_sev]
     return [f for f in findings
-            if not f.get("resolved") and SEV_ORDER.get((f.get("severity") or "").lower(), 0) >= thr]
+            if _abierto(f) and SEV_ORDER.get((f.get("severity") or "").lower(), 0) >= thr]
+
+
+def _perfil_linea(g: dict | None) -> str:
+    """'Estricto (heredado de Core Bancario)' — de dónde sale la política que se aplicó."""
+    if not g or not g.get("profile_name"):
+        return ""
+    origen = {"repo": "propio del repositorio", "proyecto": "heredado del proyecto",
+              "empresa": "por defecto de la empresa", "base": "base de SegFix"}.get(g.get("origen"), "")
+    det = g.get("origen_detalle")
+    if det and g.get("origen") == "proyecto":
+        origen = f"heredado de {det}"
+    return f"{g['profile_name']}" + (f" ({origen})" if origen else "")
+
+
+def _score_line(sc: dict | None) -> str:
+    """'72/100 (C)' — el score que publica la API para esta ejecución."""
+    if not sc:
+        return ""
+    return f"{sc.get('score')}/100 ({sc.get('letra')})"
 
 
 def summarize(base: str, ex: dict, findings: list[dict], gate_sev: str, gate_pass: bool) -> str:
@@ -112,10 +138,22 @@ def summarize(base: str, ex: dict, findings: list[dict], gate_sev: str, gate_pas
         lines.append(f"> **SegFix analizó el repositorio y encontró {found} vulnerabilidades.**")
     else:
         lines.append("> **SegFix analizó el repositorio y no encontró vulnerabilidades.** ✅")
+    sc = ex.get("scoring") or {}
+    exceptuados = sc.get("exceptuados", 0)
+    cols = ["Score de seguridad", "Encontradas", "Remediadas por IA", "Requieren acción manual", "Bloquean el despliegue"]
+    vals = [f"**{_score_line(sc) or '—'}**", f"**{found}**", f"**{fixed}**", str(manual), str(len(blockers))]
+    if exceptuados:
+        cols.insert(4, "Exceptuadas")
+        vals.insert(4, str(exceptuados))
     lines += ["",
-              "| Encontradas | Remediadas por IA | Requieren acción manual | Bloquean el despliegue |",
-              "|:--:|:--:|:--:|:--:|",
-              f"| **{found}** | **{fixed}** | {manual} | {len(blockers)} |", ""]
+              "| " + " | ".join(cols) + " |",
+              "|" + ":--:|" * len(cols),
+              "| " + " | ".join(vals) + " |", ""]
+    if sc:
+        lines += [f"<sub>El score parte de 100 y descuenta por cada vulnerabilidad que queda abierta "
+                  f"(crítica −{sc.get('pesos', {}).get('critical', 25)}, alta −{sc.get('pesos', {}).get('high', 10)}, "
+                  f"media −{sc.get('pesos', {}).get('medium', 4)}, baja −{sc.get('pesos', {}).get('low', 1)}). "
+                  f"Lo remediado y lo exceptuado no descuentan.</sub>", ""]
 
     if ex.get("pr_url"):
         lines += [f"### ✅ Pull Request listo para revisar", "",
@@ -174,7 +212,11 @@ def write_outputs(base: str, ex: dict, findings: list[dict], gate_sev: str, gate
     top = sorted(blockers, key=lambda x: -SEV_ORDER.get((x.get("severity") or "").lower(), 0))[:5]
     resumen = "; ".join(f"{(f.get('severity') or '?').upper()} {f.get('dependency', '?')}"
                         f"{' (' + f['cve_id'] + ')' if f.get('cve_id') else ''}" for f in top)
+    sc = ex.get("scoring") or {}
     vals = {
+        "score": sc.get("score", ""),
+        "score_letra": sc.get("letra", ""),
+        "excepted": sc.get("exceptuados", 0),
         "exec_id": ex["id"],
         "exec_url": f"{base.rstrip('/')}/ejecuciones/{ex['id']}",
         "found": ex.get("vulns_found", 0) or 0,
@@ -185,6 +227,8 @@ def write_outputs(base: str, ex: dict, findings: list[dict], gate_sev: str, gate
         "pr_url": ex.get("pr_url") or "",
         "gate": "pass" if gate_pass else "block",
         "threshold": gate_sev,
+        "profile": (ex.get("gate") or {}).get("profile_name", ""),
+        "profile_origin": _perfil_linea(ex.get("gate")),
         # Las correcciones no llegaron al repo (credenciales/permisos): el gate lo aclara aparte,
         # porque la causa NO es que la IA no haya podido corregir.
         "push_error": str(ex.get("push_error") or "").strip().replace("\n", " ")[:200],
@@ -213,8 +257,9 @@ def main() -> int:
     p.add_argument("--repo-url", default="", help="Repo a escanear (default: auto-detectado del CI)")
     p.add_argument("--repo-id", type=int, default=0, help="Repo del registro de proyectos (PAYG); alternativa a --repo-url")
     p.add_argument("--branch", default="", help="Rama (default: auto-detectada del CI)")
-    p.add_argument("--fail-on", default="high", choices=["none", "low", "medium", "high", "critical"],
-                   help="Rompe el pipeline si quedan vulns SIN resolver de esta severidad o mayor (default high)")
+    p.add_argument("--fail-on", default="auto", choices=["auto", "none", "low", "medium", "high", "critical"],
+                   help="Umbral que rompe el pipeline. Por defecto 'auto': manda el PERFIL de seguridad "
+                        "asignado al repo/proyecto en SegFix. Un valor explícito lo pisa (override).")
     p.add_argument("--max-wait", type=int, default=1800, help="Segundos máximos de espera (default 1800)")
     p.add_argument("--poll", type=int, default=10, help="Intervalo de polling en segundos (default 10)")
     p.add_argument("--no-wait", action="store_true", help="Lanza y no espera el resultado (sin gate)")
@@ -267,16 +312,32 @@ def main() -> int:
               f"Revisá el detalle y el motivo en {exec_url}")
         return 2
 
-    # ---- Security Gate: vulns sin resolver con severidad >= umbral (excepciones ya vienen aplicadas) ----
-    blockers = _blockers(findings, args.fail_on)
-    gate_pass = not blockers
+    # ---- Security Gate ----
+    # El veredicto lo da el SERVIDOR, según el perfil de seguridad asignado a ese repo o proyecto:
+    # así la política vive en SegFix y no repetida en el YAML de cada repositorio. El `--fail-on`
+    # queda solo como override de emergencia, o para cuando el servidor todavía no manda perfil.
+    g = ex.get("gate") or {}
+    if g and args.fail_on == "auto":
+        gate_sev = g.get("fail_on") or "high"
+        gate_pass = bool(g.get("passed"))
+    else:
+        gate_sev = "high" if args.fail_on == "auto" else args.fail_on
+        gate_pass = not _blockers(findings, gate_sev)
+    blockers = _blockers(findings, gate_sev)
 
-    md = summarize(args.url, ex, findings, args.fail_on, gate_pass)
+    md = summarize(args.url, ex, findings, gate_sev, gate_pass)
     write_summary(md)
-    write_outputs(args.url, ex, findings, args.fail_on, gate_pass)
+    write_outputs(args.url, ex, findings, gate_sev, gate_pass)
 
     found, fixed = ex.get("vulns_found", 0) or 0, ex.get("vulns_fixed", 0) or 0
+    sc = ex.get("scoring") or {}
     print()
+    if g.get("profile_name"):
+        print(f"SegFix ▸ Perfil aplicado: {_perfil_linea(g)} — frena desde {gate_sev}"
+              + (f", score mínimo {g['min_score']}" if g.get("min_score") else ""))
+    if sc:
+        print(f"SegFix ▸ Score de seguridad: {_score_line(sc)}"
+              + (f" · {sc['exceptuados']} exceptuadas" if sc.get("exceptuados") else ""))
     print(f"SegFix ▸ {fixed} de {found} vulnerabilidades remediadas automáticamente"
           + (f" · {ex.get('vulns_manual')} requieren acción manual" if ex.get("vulns_manual") else ""))
     if ex.get("pr_url"):
@@ -290,12 +351,13 @@ def main() -> int:
     if not gate_pass:
         top = "; ".join(f"{(f.get('severity') or '?').upper()} {f.get('dependency', '?')}" for f in blockers[:3])
         print()
-        print(f"::error title=Security Gate bloqueado por SegFix::Quedan {len(blockers)} "
-              f"vulnerabilidades de severidad {args.fail_on} o superior sin resolver ({top}). "
+        sc_txt = f"Score {_score_line(sc)}. " if sc else ""
+        print(f"::error title=Security Gate bloqueado por SegFix::{sc_txt}Quedan {len(blockers)} "
+              f"vulnerabilidades de severidad {gate_sev} o superior sin resolver ({top}). "
               f"Revisalas en {exec_url} — si alguna es un falso positivo, excepcionala con "
               f"justificación y fecha de revisión, y volvé a correr el pipeline.")
         return 1
-    print(f"SegFix ▸ Security Gate APROBADO ✅ — no quedan vulnerabilidades de severidad {args.fail_on} o superior.")
+    print(f"SegFix ▸ Security Gate APROBADO ✅ — no quedan vulnerabilidades de severidad {gate_sev} o superior.")
     return 0
 
 

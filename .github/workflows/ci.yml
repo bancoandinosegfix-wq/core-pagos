@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       umbral:
-        description: 'Severidad que rompe el pipeline (none|low|medium|high|critical)'
+        description: 'Umbral que rompe el pipeline. auto = usa el perfil de SegFix (recomendado)'
         required: false
-        default: 'high'
+        default: 'auto'
 
 env:
   NODE_VERSION: '20'
@@ -76,6 +76,8 @@ jobs:
       pr_url: ${{ steps.segfix.outputs.pr_url }}
       push_error: ${{ steps.segfix.outputs.push_error }}
       threshold: ${{ steps.segfix.outputs.threshold }}
+      profile: ${{ steps.segfix.outputs.profile }}
+      profile_origin: ${{ steps.segfix.outputs.profile_origin }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -90,9 +92,11 @@ jobs:
         env:
           SEGFIX_TOKEN: ${{ secrets.SEGFIX_TOKEN }}
         run: |
+          # Sin --fail-on: el umbral lo define el PERFIL de seguridad asignado en SegFix a este
+          # repositorio o a su proyecto. Se puede forzar desde el disparo manual del workflow.
           python ci/segfix_ci.py \
             --branch "${{ github.head_ref || github.ref_name }}" \
-            --fail-on "${{ github.event.inputs.umbral || 'high' }}"
+            --fail-on "${{ github.event.inputs.umbral || 'auto' }}"
 
   security-gate:
     name: Security Gate
@@ -111,6 +115,8 @@ jobs:
       PR_URL: ${{ needs.seguridad.outputs.pr_url }}
       PUSH_ERROR: ${{ needs.seguridad.outputs.push_error }}
       THRESHOLD: ${{ needs.seguridad.outputs.threshold }}
+      PROFILE: ${{ needs.seguridad.outputs.profile }}
+      PROFILE_ORIGIN: ${{ needs.seguridad.outputs.profile_origin }}
     steps:
       - name: Evaluar el resultado del análisis
         run: |
@@ -128,6 +134,9 @@ jobs:
           echo "  Remediadas automáticamente por IA .. ${FIXED:-0}"
           if [ -n "$EXCEPTED" ] && [ "$EXCEPTED" != "0" ]; then
             echo "  Exceptuadas (con revisión pactada) . ${EXCEPTED}"
+          fi
+          if [ -n "$PROFILE_ORIGIN" ]; then
+            echo "  Perfil de seguridad aplicado ....... ${PROFILE_ORIGIN}"
           fi
           echo "  Umbral que bloquea el despliegue ... ${THRESHOLD:-high} o superior"
           echo ""
