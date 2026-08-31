@@ -3,10 +3,10 @@
  * Conciliación interbancaria.
  *
  * Todas las noches (02:00) el core intercambia los archivos de interfaz con las demás entidades
- * a través de SFTP: se sube el lote de movimientos del día y se baja el de la cámara compensadora.
+ * a través de SFTP: se sube el lote de movimientos del día y se baja el de la cámara de compensación del BCE.
  * Es el canal por el que entra y sale TODO el volumen interbancario del banco.
  *
- * Contraparte: cámara compensadora (COELSA) y bancos corresponsales.
+ * Contraparte: Banco Central del Ecuador (SPI) y bancos corresponsales.
  * Ventana: 02:00–04:00. Si falla, la acreditación del día siguiente se demora.
  */
 const SftpClient = require('ssh2-sftp-client');
@@ -28,7 +28,7 @@ async function conectar() {
     return sftp;
 }
 
-/** Sube el lote de movimientos del día a la cámara compensadora. */
+/** Sube el lote de movimientos del día a la cámara de compensación del BCE. */
 async function enviarLote(fecha, contenido) {
     const sftp = await conectar();
     try {
@@ -54,10 +54,10 @@ async function recibirLote(fecha) {
     }
 }
 
-/** Formato posicional acordado con la cámara: CBU(22) TIPO(2) MONTO(15) REFERENCIA(20). */
+/** Formato posicional acordado con la cámara: CUENTA(22) TIPO(2) MONTO(15) REFERENCIA(20). */
 function parsearLote(texto) {
     return texto.split('\n').filter(Boolean).map((linea) => ({
-        cbu: linea.slice(0, 22).trim(),
+        cuenta: linea.slice(0, 22).trim(),
         tipo: linea.slice(22, 24).trim(),
         monto: Number(linea.slice(24, 39).trim()) / 100,
         referencia: linea.slice(39, 59).trim(),

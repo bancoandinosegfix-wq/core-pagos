@@ -64,6 +64,9 @@ jobs:
     outputs:
       resultado: ${{ steps.segfix.outcome }}
       exec_id: ${{ steps.segfix.outputs.exec_id }}
+      score: ${{ steps.segfix.outputs.score }}
+      score_letra: ${{ steps.segfix.outputs.score_letra }}
+      excepted: ${{ steps.segfix.outputs.excepted }}
       exec_url: ${{ steps.segfix.outputs.exec_url }}
       found: ${{ steps.segfix.outputs.found }}
       fixed: ${{ steps.segfix.outputs.fixed }}
@@ -98,6 +101,9 @@ jobs:
     env:
       EXEC_URL: ${{ needs.seguridad.outputs.exec_url }}
       EXEC_ID: ${{ needs.seguridad.outputs.exec_id }}
+      SCORE: ${{ needs.seguridad.outputs.score }}
+      SCORE_LETRA: ${{ needs.seguridad.outputs.score_letra }}
+      EXCEPTED: ${{ needs.seguridad.outputs.excepted }}
       FOUND: ${{ needs.seguridad.outputs.found }}
       FIXED: ${{ needs.seguridad.outputs.fixed }}
       BLOCKERS: ${{ needs.seguridad.outputs.blockers }}
@@ -112,8 +118,17 @@ jobs:
           echo "  SegFix · Security Gate"
           echo "════════════════════════════════════════════════════════════════════"
           echo ""
+          if [ -n "$SCORE" ]; then
+            echo "  ★ SCORE DE SEGURIDAD: ${SCORE}/100  —  nota ${SCORE_LETRA}"
+            echo "    (parte de 100 y descuenta por cada vulnerabilidad que queda abierta;"
+            echo "     lo remediado y lo exceptuado no descuentan)"
+            echo ""
+          fi
           echo "  Vulnerabilidades encontradas ....... ${FOUND:-0}"
           echo "  Remediadas automáticamente por IA .. ${FIXED:-0}"
+          if [ -n "$EXCEPTED" ] && [ "$EXCEPTED" != "0" ]; then
+            echo "  Exceptuadas (con revisión pactada) . ${EXCEPTED}"
+          fi
           echo "  Umbral que bloquea el despliegue ... ${THRESHOLD:-high} o superior"
           echo ""
           if [ -n "$PR_URL" ]; then
@@ -153,7 +168,7 @@ jobs:
           echo "      pasa y el despliegue continúa."
           echo "════════════════════════════════════════════════════════════════════"
 
-          echo "::error title=Despliegue bloqueado por SegFix::Quedan ${BLOCKERS:-?} vulnerabilidades de severidad ${THRESHOLD:-high} o superior sin resolver. Revisalas en ${EXEC_URL}"
+          echo "::error title=Despliegue bloqueado por SegFix::Score de seguridad ${SCORE:-?}/100 (${SCORE_LETRA:-?}). Quedan ${BLOCKERS:-?} vulnerabilidades de severidad ${THRESHOLD:-high} o superior sin resolver. Revisalas en ${EXEC_URL}"
           exit 1
 
   package:

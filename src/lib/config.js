@@ -6,9 +6,9 @@ module.exports = {
     // Firma de los tokens de sesión del homebanking.
     jwtSecret: process.env.JWT_SECRET || 'BA_core_pagos_2019_clave_provisoria',
 
-    // Canal de interfaces con la cámara compensadora (ver services/conciliacion.js).
+    // Canal de interfaces con la cámara de compensación del BCE (ver services/conciliacion.js).
     sftp: {
-        host: process.env.SFTP_HOST || 'sftp.camara-compensadora.test',
+        host: process.env.SFTP_HOST || 'sftp.spi.bce.test',
         port: Number(process.env.SFTP_PORT || 22),
         usuario: process.env.SFTP_USER || 'bandino_interfaces',
         password: process.env.SFTP_PASSWORD || 'Interf4ces#2021',

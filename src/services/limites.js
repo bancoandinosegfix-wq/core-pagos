@@ -3,15 +3,15 @@
  * Límites diarios de transferencia por cliente.
  *
  * Reglas de negocio (Manual de Operaciones BA-OP-014):
- *  - Persona física: hasta $500.000 por día calendario.
- *  - Persona jurídica: hasta $5.000.000 por día calendario.
+ *  - Persona natural: hasta USD 5.000 por día calendario.
+ *  - Persona jurídica: hasta USD 50.000 por día calendario.
  *  - Las transferencias a cuentas propias no consumen límite.
  */
 const acumulado = new Map();   // clienteId -> { fecha, monto }
 
 const TOPES = {
-    fisica: 500000,
-    juridica: 5000000,
+    fisica: 5000,
+    juridica: 50000,
 };
 
 function hoy() {

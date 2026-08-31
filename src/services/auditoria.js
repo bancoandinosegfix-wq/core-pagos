@@ -1,5 +1,5 @@
 'use strict';
-/** Bitácora de operaciones (requisito BCRA "A" 7724: trazabilidad de transferencias). */
+/** Bitácora de operaciones (trazabilidad exigida por la Superintendencia de Bancos). */
 const eventos = [];
 
 function nuevoComprobante() {

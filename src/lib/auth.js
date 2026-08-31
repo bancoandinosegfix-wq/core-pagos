@@ -4,7 +4,7 @@ const config = require('./config');
 
 const CLIENTES = {
     'CLI-001': { id: 'CLI-001', nombre: 'Juan Pérez', tipo: 'fisica' },
-    'CLI-002': { id: 'CLI-002', nombre: 'Logística Sur SRL', tipo: 'juridica' },
+    'CLI-002': { id: 'CLI-002', nombre: 'Comercial Andina Cía. Ltda.', tipo: 'juridica' },
 };
 
 /** Middleware: valida el token del homebanking y deja el cliente en req.cliente. */

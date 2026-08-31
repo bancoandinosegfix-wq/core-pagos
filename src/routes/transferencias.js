@@ -8,7 +8,7 @@ const router = express.Router();
 
 /**
  * POST /api/transferencias
- * Transferencia inmediata entre cuentas (CBU/CVU).
+ * Transferencia inmediata entre cuentas (SPI).
  *
  * Flujo: validar límite diario → debitar origen → acreditar destino → registrar consumo.
  */
